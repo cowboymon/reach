@@ -13,9 +13,20 @@ import {
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 import * as SplashScreen from 'expo-splash-screen';
-import { AppProvider } from '../context/AppContext';
+import { AppProvider, useApp } from '../context/AppContext';
 
 SplashScreen.preventAutoHideAsync();
+
+function EngagementTracker() {
+  const { recordEngagementHour } = useApp();
+
+  useEffect(() => {
+    // Record the hour of day the user opened the app (for adaptive notification timing)
+    recordEngagementHour(new Date().getHours());
+  }, [recordEngagementHour]);
+
+  return null;
+}
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -36,8 +47,15 @@ export default function RootLayout() {
 
   return (
     <AppProvider>
+      <EngagementTracker />
       <StatusBar style="dark" backgroundColor="#F5F0E8" />
-      <Stack screenOptions={{ headerShown: false, animation: 'fade', contentStyle: { backgroundColor: '#F5F0E8' } }}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: 'fade',
+          contentStyle: { backgroundColor: '#F5F0E8' },
+        }}
+      >
         <Stack.Screen name="index" />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="onboarding-contacts" />

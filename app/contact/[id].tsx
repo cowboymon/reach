@@ -6,7 +6,7 @@ import { ArrowLeft } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Navigation } from '../../components/Navigation';
 import { useApp } from '../../context/AppContext';
-import type { Tier, Feeling } from '../../types';
+import type { Feeling, Tier } from '../../types';
 
 const TIER_COLORS: Record<Tier, string> = {
   Drifted: '#C47A7A',
@@ -29,31 +29,55 @@ const FEELING_COLORS: Record<Feeling, string> = {
 };
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+  return new Date(dateStr).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+  });
 }
 
 export default function ContactProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { data, logInteraction, getInteractionsForContact, updateContactTier, deleteContact } = useApp();
+  const {
+    data,
+    logInteraction,
+    getInteractionsForContact,
+    updateContactTier,
+    deleteContact,
+  } = useApp();
 
   const contact = data.contacts.find((c) => c.id === id);
   const interactions = getInteractionsForContact(id ?? '');
 
-  const [isAdding, setIsAdding] = useState(false);
+  const [isAddingLog, setIsAddingLog] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [newFeeling, setNewFeeling] = useState<Feeling | null>(null);
   const [showTierPicker, setShowTierPicker] = useState(false);
 
   if (!contact) {
     return (
-      <View className="flex-1 bg-linen items-center justify-center" style={{ paddingTop: insets.top }}>
-        <Text style={{ fontFamily: 'PlusJakartaSans_400Regular', color: '#1C1814', opacity: 0.4 }}>
+      <View
+        className="flex-1 bg-linen items-center justify-center"
+        style={{ paddingTop: insets.top }}
+      >
+        <Text
+          style={{
+            fontFamily: 'PlusJakartaSans_400Regular',
+            color: '#1C1814',
+            opacity: 0.4,
+          }}
+        >
           Contact not found.
         </Text>
         <TouchableOpacity onPress={() => router.back()} className="mt-6">
-          <Text style={{ fontFamily: 'PlusJakartaSans_400Regular', color: '#1C1814', textDecorationLine: 'underline' }}>
+          <Text
+            style={{
+              fontFamily: 'PlusJakartaSans_400Regular',
+              color: '#1C1814',
+              textDecorationLine: 'underline',
+            }}
+          >
             Go back
           </Text>
         </TouchableOpacity>
@@ -61,12 +85,12 @@ export default function ContactProfile() {
     );
   }
 
-  const handleSaveInteraction = async () => {
+  const handleSaveLog = async () => {
     if (!newFeeling) return;
     await logInteraction(contact.id, newFeeling, newNote.trim());
     setNewNote('');
     setNewFeeling(null);
-    setIsAdding(false);
+    setIsAddingLog(false);
   };
 
   const handleDeleteContact = () => {
@@ -111,43 +135,82 @@ export default function ContactProfile() {
 
           <Text
             className="text-ink mb-6"
-            style={{ fontFamily: 'Fraunces_700Bold', fontSize: 40, lineHeight: 52, letterSpacing: -0.8 }}
+            style={{
+              fontFamily: 'Fraunces_700Bold',
+              fontSize: 40,
+              lineHeight: 52,
+              letterSpacing: -0.8,
+            }}
           >
             {contact.name}
           </Text>
 
-          <View
-            className="self-start px-4 py-1.5 mb-3"
-            style={{ backgroundColor: TIER_COLORS[contact.tier], borderRadius: 3 }}
-          >
-            <Text style={{ fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13, color: '#F5F0E8' }}>
-              {contact.tier}
-            </Text>
-          </View>
-          <Text
-            className="text-ink italic"
-            style={{ fontFamily: 'Fraunces_400Regular', fontSize: 14, opacity: 0.5, lineHeight: 24 }}
-          >
-            {TIER_DESCRIPTIONS[contact.tier]}
-          </Text>
+          {/* Tier — only shown when assessed */}
+          {contact.tierAssessed ? (
+            <View>
+              <View
+                className="self-start px-4 py-1.5 mb-3"
+                style={{
+                  backgroundColor: TIER_COLORS[contact.tier],
+                  borderRadius: 3,
+                }}
+              >
+                <Text
+                  style={{
+                    fontFamily: 'PlusJakartaSans_500Medium',
+                    fontSize: 13,
+                    color: '#F5F0E8',
+                  }}
+                >
+                  {contact.tier}
+                </Text>
+              </View>
+              <Text
+                className="italic text-ink"
+                style={{
+                  fontFamily: 'Fraunces_400Regular',
+                  fontSize: 14,
+                  opacity: 0.5,
+                  lineHeight: 24,
+                }}
+              >
+                {TIER_DESCRIPTIONS[contact.tier]}
+              </Text>
+            </View>
+          ) : (
+            <View>
+              <Text
+                className="italic text-ink"
+                style={{
+                  fontFamily: 'Fraunces_400Regular',
+                  fontSize: 14,
+                  opacity: 0.35,
+                  lineHeight: 24,
+                }}
+              >
+                Tier unset — Reach will ask after your first conversation.
+              </Text>
+            </View>
+          )}
         </MotiView>
 
         {/* Interaction log */}
         <View className="mb-12">
           {/* Add log entry */}
-          {!isAdding ? (
+          {!isAddingLog ? (
             <TouchableOpacity
-              onPress={() => setIsAdding(true)}
+              onPress={() => setIsAddingLog(true)}
               activeOpacity={0.7}
               className="w-full py-5 pl-6"
-              style={{
-                borderLeftWidth: 2,
-                borderLeftColor: 'rgba(28,24,20,0.15)',
-              }}
+              style={{ borderLeftWidth: 2, borderLeftColor: 'rgba(28,24,20,0.15)' }}
             >
               <Text
                 className="italic text-ink"
-                style={{ fontFamily: 'Fraunces_400Regular', fontSize: 14, opacity: 0.5 }}
+                style={{
+                  fontFamily: 'Fraunces_400Regular',
+                  fontSize: 14,
+                  opacity: 0.5,
+                }}
               >
                 + Log a reach out
               </Text>
@@ -161,7 +224,13 @@ export default function ContactProfile() {
               style={{ borderLeftWidth: 2, borderLeftColor: 'rgba(28,24,20,0.15)' }}
             >
               <Text
-                style={{ fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: '#1C1814', opacity: 0.4, marginBottom: 12 }}
+                style={{
+                  fontFamily: 'PlusJakartaSans_400Regular',
+                  fontSize: 12,
+                  color: '#1C1814',
+                  opacity: 0.4,
+                  marginBottom: 12,
+                }}
               >
                 Today
               </Text>
@@ -173,7 +242,7 @@ export default function ContactProfile() {
                 placeholderTextColor="rgba(28,24,20,0.3)"
                 multiline
                 numberOfLines={2}
-                className="text-ink italic mb-4"
+                className="italic text-ink mb-4"
                 style={{
                   fontFamily: 'Fraunces_400Regular',
                   fontSize: 18,
@@ -186,17 +255,25 @@ export default function ContactProfile() {
                 autoFocus
               />
 
-              <View className="flex-row gap-3 mb-5" style={{ gap: 10 }}>
+              <View className="flex-row mb-5" style={{ gap: 10 }}>
                 {(['Good', 'Quiet', 'Hard'] as Feeling[]).map((feeling) => (
                   <TouchableOpacity
                     key={feeling}
-                    onPress={() => setNewFeeling(newFeeling === feeling ? null : feeling)}
+                    onPress={() =>
+                      setNewFeeling(newFeeling === feeling ? null : feeling)
+                    }
                     activeOpacity={0.8}
                     className="px-3 py-1.5"
                     style={{
                       borderWidth: 1,
-                      borderColor: newFeeling === feeling ? FEELING_COLORS[feeling] : 'rgba(28,24,20,0.1)',
-                      backgroundColor: newFeeling === feeling ? FEELING_COLORS[feeling] : 'transparent',
+                      borderColor:
+                        newFeeling === feeling
+                          ? FEELING_COLORS[feeling]
+                          : 'rgba(28,24,20,0.1)',
+                      backgroundColor:
+                        newFeeling === feeling
+                          ? FEELING_COLORS[feeling]
+                          : 'transparent',
                       borderRadius: 3,
                     }}
                   >
@@ -204,7 +281,8 @@ export default function ContactProfile() {
                       style={{
                         fontFamily: 'PlusJakartaSans_500Medium',
                         fontSize: 12,
-                        color: newFeeling === feeling ? '#F5F0E8' : '#1C1814',
+                        color:
+                          newFeeling === feeling ? '#F5F0E8' : '#1C1814',
                         opacity: newFeeling === feeling ? 1 : 0.4,
                       }}
                     >
@@ -217,22 +295,42 @@ export default function ContactProfile() {
               <View className="flex-row" style={{ gap: 12 }}>
                 {newNote.trim() && newFeeling && (
                   <TouchableOpacity
-                    onPress={handleSaveInteraction}
+                    onPress={handleSaveLog}
                     activeOpacity={0.8}
                     className="py-2.5 px-5 border"
-                    style={{ borderColor: 'rgba(28,24,20,0.2)', borderRadius: 4 }}
+                    style={{
+                      borderColor: 'rgba(28,24,20,0.2)',
+                      borderRadius: 4,
+                    }}
                   >
-                    <Text style={{ fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13, color: '#1C1814' }}>
+                    <Text
+                      style={{
+                        fontFamily: 'PlusJakartaSans_500Medium',
+                        fontSize: 13,
+                        color: '#1C1814',
+                      }}
+                    >
                       Save
                     </Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity
-                  onPress={() => { setIsAdding(false); setNewNote(''); setNewFeeling(null); }}
+                  onPress={() => {
+                    setIsAddingLog(false);
+                    setNewNote('');
+                    setNewFeeling(null);
+                  }}
                   activeOpacity={0.6}
                   className="py-2.5 px-4"
                 >
-                  <Text style={{ fontFamily: 'PlusJakartaSans_400Regular', fontSize: 13, color: '#1C1814', opacity: 0.3 }}>
+                  <Text
+                    style={{
+                      fontFamily: 'PlusJakartaSans_400Regular',
+                      fontSize: 13,
+                      color: '#1C1814',
+                      opacity: 0.3,
+                    }}
+                  >
                     Cancel
                   </Text>
                 </TouchableOpacity>
@@ -249,7 +347,8 @@ export default function ContactProfile() {
               className="pl-6 py-5"
               style={{
                 borderLeftWidth: 2,
-                borderLeftColor: FEELING_COLORS[interaction.feeling] ?? 'rgba(28,24,20,0.1)',
+                borderLeftColor:
+                  FEELING_COLORS[interaction.feeling] ?? 'rgba(28,24,20,0.1)',
               }}
             >
               <Text
@@ -267,7 +366,12 @@ export default function ContactProfile() {
               {interaction.note ? (
                 <Text
                   className="italic text-ink mb-2"
-                  style={{ fontFamily: 'Fraunces_400Regular', fontSize: 18, opacity: 0.6, lineHeight: 32 }}
+                  style={{
+                    fontFamily: 'Fraunces_400Regular',
+                    fontSize: 18,
+                    opacity: 0.6,
+                    lineHeight: 32,
+                  }}
                 >
                   {interaction.note}
                 </Text>
@@ -286,7 +390,7 @@ export default function ContactProfile() {
           ))}
         </View>
 
-        {/* Edit tier */}
+        {/* Tier editor — always available, gated on whether assessed */}
         {!showTierPicker ? (
           <TouchableOpacity
             onPress={() => setShowTierPicker(true)}
@@ -294,8 +398,14 @@ export default function ContactProfile() {
             className="w-full py-4 border items-center mb-4"
             style={{ borderColor: 'rgba(28,24,20,0.15)', borderRadius: 4 }}
           >
-            <Text style={{ fontFamily: 'PlusJakartaSans_500Medium', fontSize: 14, color: '#1C1814' }}>
-              Edit tier
+            <Text
+              style={{
+                fontFamily: 'PlusJakartaSans_500Medium',
+                fontSize: 14,
+                color: '#1C1814',
+              }}
+            >
+              {contact.tierAssessed ? 'Edit tier' : 'Set tier'}
             </Text>
           </TouchableOpacity>
         ) : (
@@ -306,43 +416,67 @@ export default function ContactProfile() {
             className="mb-4"
             style={{ gap: 8 }}
           >
-            {(['Back', 'Familiar', 'Reconnecting', 'Drifted'] as Tier[]).map((tier) => (
-              <TouchableOpacity
-                key={tier}
-                onPress={async () => {
-                  await updateContactTier(contact.id, tier);
-                  setShowTierPicker(false);
-                }}
-                activeOpacity={0.8}
-                className="w-full py-3.5 px-4 border"
-                style={{
-                  borderColor: contact.tier === tier ? TIER_COLORS[tier] : 'rgba(28,24,20,0.1)',
-                  backgroundColor: contact.tier === tier ? TIER_COLORS[tier] + '22' : 'transparent',
-                  borderRadius: 4,
-                }}
-              >
-                <Text
+            {(['Back', 'Familiar', 'Reconnecting', 'Drifted'] as Tier[]).map(
+              (tier) => (
+                <TouchableOpacity
+                  key={tier}
+                  onPress={async () => {
+                    await updateContactTier(contact.id, tier, true);
+                    setShowTierPicker(false);
+                  }}
+                  activeOpacity={0.8}
+                  className="w-full py-3.5 px-4 border"
                   style={{
-                    fontFamily: contact.tier === tier ? 'PlusJakartaSans_700Bold' : 'PlusJakartaSans_400Regular',
-                    fontSize: 14,
-                    color: '#1C1814',
+                    borderColor:
+                      contact.tier === tier && contact.tierAssessed
+                        ? TIER_COLORS[tier]
+                        : 'rgba(28,24,20,0.1)',
+                    backgroundColor:
+                      contact.tier === tier && contact.tierAssessed
+                        ? TIER_COLORS[tier] + '22'
+                        : 'transparent',
+                    borderRadius: 4,
                   }}
                 >
-                  {tier}
-                </Text>
-                <Text
-                  style={{ fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: '#1C1814', opacity: 0.4, marginTop: 2 }}
-                >
-                  {TIER_DESCRIPTIONS[tier]}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={{
+                      fontFamily:
+                        contact.tier === tier && contact.tierAssessed
+                          ? 'PlusJakartaSans_700Bold'
+                          : 'PlusJakartaSans_400Regular',
+                      fontSize: 14,
+                      color: '#1C1814',
+                    }}
+                  >
+                    {tier}
+                  </Text>
+                  <Text
+                    style={{
+                      fontFamily: 'PlusJakartaSans_400Regular',
+                      fontSize: 12,
+                      color: '#1C1814',
+                      opacity: 0.4,
+                      marginTop: 2,
+                    }}
+                  >
+                    {TIER_DESCRIPTIONS[tier]}
+                  </Text>
+                </TouchableOpacity>
+              )
+            )}
             <TouchableOpacity
               onPress={() => setShowTierPicker(false)}
               activeOpacity={0.6}
               className="items-center py-3"
             >
-              <Text style={{ fontFamily: 'PlusJakartaSans_400Regular', fontSize: 13, color: '#1C1814', opacity: 0.35 }}>
+              <Text
+                style={{
+                  fontFamily: 'PlusJakartaSans_400Regular',
+                  fontSize: 13,
+                  color: '#1C1814',
+                  opacity: 0.35,
+                }}
+              >
                 Cancel
               </Text>
             </TouchableOpacity>
@@ -350,8 +484,19 @@ export default function ContactProfile() {
         )}
 
         {/* Delete */}
-        <TouchableOpacity onPress={handleDeleteContact} activeOpacity={0.6} className="items-center py-4">
-          <Text style={{ fontFamily: 'PlusJakartaSans_400Regular', fontSize: 13, color: '#C47A7A', opacity: 0.6 }}>
+        <TouchableOpacity
+          onPress={handleDeleteContact}
+          activeOpacity={0.6}
+          className="items-center py-4"
+        >
+          <Text
+            style={{
+              fontFamily: 'PlusJakartaSans_400Regular',
+              fontSize: 13,
+              color: '#C47A7A',
+              opacity: 0.6,
+            }}
+          >
             Remove from constellation
           </Text>
         </TouchableOpacity>

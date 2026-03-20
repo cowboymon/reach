@@ -12,7 +12,17 @@
       "resizeMode": "contain",
       "backgroundColor": "#F5F0E8"
     },
-    "plugins": ["expo-router", "expo-contacts"],
+    "plugins": [
+      "expo-router",
+      "expo-contacts",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#F5F0E8"
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true
     },

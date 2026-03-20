@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { AppData, Contact, Interaction, Settings, Tier, Feeling } from '../types';
+import type { AppData, Contact, Interaction, Settings, Tier, Feeling, TierSuggestion } from '../types';
+import { getTierSuggestion, urgencyScore } from '../utils/tierLogic';
+import { scheduleNextNudge } from '../utils/notifications';
 
 const STORAGE_KEY = 'reach_app_data';
 
@@ -8,6 +10,7 @@ const DEFAULT_SETTINGS: Settings = {
   cadence: 'Daily',
   notificationTime: '09:00',
   notificationsEnabled: true,
+  engagementHours: [],
 };
 
 const DEFAULT_DATA: AppData = {
@@ -17,18 +20,29 @@ const DEFAULT_DATA: AppData = {
   onboarded: false,
 };
 
+interface ActiveTierSuggestion {
+  contactId: string;
+  suggestion: TierSuggestion;
+}
+
 interface AppContextValue {
   data: AppData;
+  isLoading: boolean;
+  // Tier suggestion
+  tierSuggestion: ActiveTierSuggestion | null;
+  acceptTierSuggestion: (contactId: string, tier: Tier) => Promise<void>;
+  dismissTierSuggestion: () => void;
   // Contacts
-  addContact: (contact: Omit<Contact, 'id' | 'addedAt'>) => Promise<Contact>;
-  addContacts: (contacts: Omit<Contact, 'id' | 'addedAt'>[]) => Promise<void>;
-  updateContactTier: (contactId: string, tier: Tier) => Promise<void>;
+  addContact: (contact: Omit<Contact, 'id' | 'addedAt' | 'tierAssessed'>) => Promise<Contact>;
+  addContacts: (contacts: Omit<Contact, 'id' | 'addedAt' | 'tierAssessed'>[]) => Promise<void>;
+  updateContactTier: (contactId: string, tier: Tier, assessed?: boolean) => Promise<void>;
   deleteContact: (contactId: string) => Promise<void>;
   // Interactions
   logInteraction: (contactId: string, feeling: Feeling, note: string) => Promise<void>;
   getInteractionsForContact: (contactId: string) => Interaction[];
   // Settings
   updateSettings: (settings: Partial<Settings>) => Promise<void>;
+  recordEngagementHour: (hour: number) => Promise<void>;
   // Onboarding
   completeOnboarding: () => Promise<void>;
   // Today's nudge
@@ -36,7 +50,6 @@ interface AppContextValue {
   deferContact: (contactId: string) => void;
   // Stats
   getWeeklyInteractions: () => { date: string; contact: Contact | null; feeling: Feeling | null }[];
-  isLoading: boolean;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -45,6 +58,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<AppData>(DEFAULT_DATA);
   const [isLoading, setIsLoading] = useState(true);
   const [deferredIds, setDeferredIds] = useState<Set<string>>(new Set());
+  const [tierSuggestion, setTierSuggestion] = useState<ActiveTierSuggestion | null>(null);
 
   useEffect(() => {
     loadData();
@@ -54,7 +68,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
       if (raw) {
-        setData(JSON.parse(raw));
+        const parsed: AppData = JSON.parse(raw);
+        // Backfill tierAssessed for contacts that predate the field
+        parsed.contacts = parsed.contacts.map((c) =>
+          c.tierAssessed === undefined ? { ...c, tierAssessed: false } : c
+        );
+        // Backfill engagementHours for settings that predate the field
+        if (!parsed.settings.engagementHours) {
+          parsed.settings.engagementHours = [];
+        }
+        setData(parsed);
       }
     } catch (e) {
       console.error('Failed to load data', e);
@@ -63,49 +86,105 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const saveData = async (next: AppData) => {
+  const persist = useCallback((next: AppData) => {
     setData(next);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  };
-
-  const addContact = useCallback(async (contact: Omit<Contact, 'id' | 'addedAt'>): Promise<Contact> => {
-    const newContact: Contact = {
-      ...contact,
-      id: `c_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      addedAt: new Date().toISOString(),
-    };
-    setData((prev) => {
-      const next = { ...prev, contacts: [...prev.contacts, newContact] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-    return newContact;
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+    return next;
   }, []);
 
-  const addContacts = useCallback(async (contacts: Omit<Contact, 'id' | 'addedAt'>[]) => {
-    const now = Date.now();
-    const newContacts: Contact[] = contacts.map((c, i) => ({
-      ...c,
-      id: `c_${now + i}_${Math.random().toString(36).slice(2)}`,
-      addedAt: new Date().toISOString(),
-    }));
-    setData((prev) => {
-      const next = { ...prev, contacts: [...prev.contacts, ...newContacts] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
+  // ─── Tier suggestion ────────────────────────────────────────────────────────
+
+  const evaluateTierSuggestion = useCallback(
+    (contactId: string, contacts: Contact[], interactions: Interaction[]) => {
+      const contact = contacts.find((c) => c.id === contactId);
+      if (!contact) return;
+      const contactInteractions = interactions.filter((i) => i.contactId === contactId);
+      const suggestion = getTierSuggestion(contact, contactInteractions);
+      if (suggestion) {
+        setTierSuggestion({ contactId, suggestion });
+      }
+    },
+    []
+  );
+
+  const acceptTierSuggestion = useCallback(
+    async (contactId: string, tier: Tier) => {
+      setData((prev) => {
+        const next = {
+          ...prev,
+          contacts: prev.contacts.map((c) =>
+            c.id === contactId ? { ...c, tier, tierAssessed: true } : c
+          ),
+        };
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+        scheduleNextNudge(next.settings, next.contacts, next.interactions);
+        return next;
+      });
+      setTierSuggestion(null);
+    },
+    []
+  );
+
+  const dismissTierSuggestion = useCallback(() => {
+    setTierSuggestion(null);
   }, []);
 
-  const updateContactTier = useCallback(async (contactId: string, tier: Tier) => {
-    setData((prev) => {
-      const next = {
-        ...prev,
-        contacts: prev.contacts.map((c) => (c.id === contactId ? { ...c, tier } : c)),
+  // ─── Contacts ───────────────────────────────────────────────────────────────
+
+  const addContact = useCallback(
+    async (contact: Omit<Contact, 'id' | 'addedAt' | 'tierAssessed'>): Promise<Contact> => {
+      const newContact: Contact = {
+        ...contact,
+        id: `c_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        addedAt: new Date().toISOString(),
+        tierAssessed: false,
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+      setData((prev) => {
+        const next = { ...prev, contacts: [...prev.contacts, newContact] };
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+        scheduleNextNudge(next.settings, next.contacts, next.interactions);
+        return next;
+      });
+      return newContact;
+    },
+    []
+  );
+
+  const addContacts = useCallback(
+    async (contacts: Omit<Contact, 'id' | 'addedAt' | 'tierAssessed'>[]) => {
+      const now = Date.now();
+      const newContacts: Contact[] = contacts.map((c, i) => ({
+        ...c,
+        id: `c_${now + i}_${Math.random().toString(36).slice(2)}`,
+        addedAt: new Date().toISOString(),
+        tierAssessed: false,
+      }));
+      setData((prev) => {
+        const next = { ...prev, contacts: [...prev.contacts, ...newContacts] };
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+        scheduleNextNudge(next.settings, next.contacts, next.interactions);
+        return next;
+      });
+    },
+    []
+  );
+
+  const updateContactTier = useCallback(
+    async (contactId: string, tier: Tier, assessed = true) => {
+      setData((prev) => {
+        const next = {
+          ...prev,
+          contacts: prev.contacts.map((c) =>
+            c.id === contactId ? { ...c, tier, tierAssessed: assessed } : c
+          ),
+        };
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+        scheduleNextNudge(next.settings, next.contacts, next.interactions);
+        return next;
+      });
+    },
+    []
+  );
 
   const deleteContact = useCallback(async (contactId: string) => {
     setData((prev) => {
@@ -114,68 +193,121 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         contacts: prev.contacts.filter((c) => c.id !== contactId),
         interactions: prev.interactions.filter((i) => i.contactId !== contactId),
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+      scheduleNextNudge(next.settings, next.contacts, next.interactions);
       return next;
     });
+    setTierSuggestion((prev) => (prev?.contactId === contactId ? null : prev));
   }, []);
 
-  const logInteraction = useCallback(async (contactId: string, feeling: Feeling, note: string) => {
-    const interaction: Interaction = {
-      id: `i_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      contactId,
-      date: new Date().toISOString(),
-      feeling,
-      note,
-    };
-    setData((prev) => {
-      const next = { ...prev, interactions: [interaction, ...prev.interactions] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+  // ─── Interactions ───────────────────────────────────────────────────────────
 
-  const getInteractionsForContact = useCallback((contactId: string): Interaction[] => {
-    return data.interactions.filter((i) => i.contactId === contactId);
-  }, [data.interactions]);
+  const logInteraction = useCallback(
+    async (contactId: string, feeling: Feeling, note: string) => {
+      const interaction: Interaction = {
+        id: `i_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        contactId,
+        date: new Date().toISOString(),
+        feeling,
+        note,
+      };
+      setData((prev) => {
+        const nextInteractions = [interaction, ...prev.interactions];
+        const next = { ...prev, interactions: nextInteractions };
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+        scheduleNextNudge(next.settings, next.contacts, next.interactions);
+        // Evaluate tier suggestion after state update
+        const contact = prev.contacts.find((c) => c.id === contactId);
+        if (contact) {
+          const contactInteractions = nextInteractions.filter((i) => i.contactId === contactId);
+          const suggestion = getTierSuggestion(contact, contactInteractions);
+          if (suggestion) {
+            setTierSuggestion({ contactId, suggestion });
+          }
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const getInteractionsForContact = useCallback(
+    (contactId: string): Interaction[] =>
+      data.interactions.filter((i) => i.contactId === contactId),
+    [data.interactions]
+  );
+
+  // ─── Settings ───────────────────────────────────────────────────────────────
 
   const updateSettings = useCallback(async (settings: Partial<Settings>) => {
     setData((prev) => {
       const next = { ...prev, settings: { ...prev.settings, ...settings } };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+      scheduleNextNudge(next.settings, next.contacts, next.interactions);
       return next;
     });
   }, []);
+
+  const recordEngagementHour = useCallback(async (hour: number) => {
+    setData((prev) => {
+      const engagementHours = [...(prev.settings.engagementHours ?? []), hour].slice(-50);
+      const next = { ...prev, settings: { ...prev.settings, engagementHours } };
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+      return next;
+    });
+  }, []);
+
+  // ─── Onboarding ─────────────────────────────────────────────────────────────
 
   const completeOnboarding = useCallback(async () => {
     setData((prev) => {
       const next = { ...prev, onboarded: true };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(console.error);
+      scheduleNextNudge(next.settings, next.contacts, next.interactions);
       return next;
     });
   }, []);
 
-  // Pick the contact due for a nudge today (least recently contacted, not deferred)
+  // ─── Nudge logic ────────────────────────────────────────────────────────────
+
   const getTodayContact = useCallback((): Contact | null => {
     if (data.contacts.length === 0) return null;
 
     const eligible = data.contacts.filter((c) => !deferredIds.has(c.id));
-    if (eligible.length === 0) return data.contacts[0];
+    const pool = eligible.length > 0 ? eligible : data.contacts;
 
-    // Sort by last interaction date (oldest first)
-    const sorted = [...eligible].sort((a, b) => {
-      const lastA = data.interactions.filter((i) => i.contactId === a.id)[0]?.date ?? a.addedAt;
-      const lastB = data.interactions.filter((i) => i.contactId === b.id)[0]?.date ?? b.addedAt;
-      return new Date(lastA).getTime() - new Date(lastB).getTime();
+    const sorted = [...pool].sort((a, b) => {
+      const aScore = urgencyScore(
+        a,
+        data.interactions.filter((i) => i.contactId === a.id)
+      );
+      const bScore = urgencyScore(
+        b,
+        data.interactions.filter((i) => i.contactId === b.id)
+      );
+      return bScore - aScore;
     });
 
-    return sorted[0];
-  }, [data.contacts, data.interactions, deferredIds]);
+    const top = sorted[0];
+
+    // Check for cold-contact tier suggestion when surfacing this contact
+    if (top && top.tierAssessed) {
+      const contactInteractions = data.interactions.filter((i) => i.contactId === top.id);
+      const suggestion = getTierSuggestion(top, contactInteractions);
+      if (suggestion?.type === 'cold_check' && !tierSuggestion) {
+        setTierSuggestion({ contactId: top.id, suggestion });
+      }
+    }
+
+    return top;
+  }, [data.contacts, data.interactions, deferredIds, tierSuggestion]);
 
   const deferContact = useCallback((contactId: string) => {
     setDeferredIds((prev) => new Set([...prev, contactId]));
   }, []);
 
-  // Return last 7 days with interaction data per day
+  // ─── Weekly stats ────────────────────────────────────────────────────────────
+
   const getWeeklyInteractions = useCallback(() => {
     const result = [];
     for (let i = 6; i >= 0; i--) {
@@ -197,7 +329,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       result.push({
         date: d.toLocaleDateString('en-US', { weekday: 'short' }),
         contact,
-        feeling: (interaction?.feeling ?? null) as any,
+        feeling: (interaction?.feeling ?? null) as Feeling | null,
       });
     }
     return result;
@@ -207,6 +339,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         data,
+        isLoading,
+        tierSuggestion,
+        acceptTierSuggestion,
+        dismissTierSuggestion,
         addContact,
         addContacts,
         updateContactTier,
@@ -214,11 +350,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         logInteraction,
         getInteractionsForContact,
         updateSettings,
+        recordEngagementHour,
         completeOnboarding,
         getTodayContact,
         deferContact,
         getWeeklyInteractions,
-        isLoading,
       }}
     >
       {children}
